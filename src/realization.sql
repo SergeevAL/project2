@@ -171,11 +171,19 @@ select distinct ss.shippingid,
 	ss.shipping_plan_datetime,
 	st.transfer_type_id,
 	scr.shipping_country_id,
-	sa.agreementid
-from public.shipping ss
+	ss.agr[1]::int as agreementid
+from (
+select distinct
+    shippingid, 
+    vendorid, 
+    payment_amount, 
+    shipping_plan_datetime, 
+    shipping_country, 
+    regexp_split_to_array(shipping_transfer_description, E'\:+') as trf, 
+    regexp_split_to_array(vendor_agreement_description, E'\:+') as agr 
+from shipping) ss
 join public.shipping_country_rates scr using (shipping_country)
-join public.shipping_transfer st on ((st.transfer_type || ':' || st.transfer_model) = ss.shipping_transfer_description)
-join public.shipping_agreement sa on ((sa.agreementid || ':'|| sa.agreement_number || ':' || sa.agreement_rate || ':' || sa.agreement_commission) = ss.vendor_agreement_description);
+join public.shipping_transfer st on st.transfer_type = ss.trf[1] and st.transfer_model = ss.trf[2];
 
 -- select * from public.shipping_info;
 
@@ -187,17 +195,17 @@ with
 ssp as (
 	select shippingid,
 		max(case when state = 'booked' then state_datetime else null end) as shipping_start_fact_datetime,
-		max(state_datetime) as state_datetime
+		max(case when state = 'recieved' then state_datetime else null end) as shipping_end_fact_datetime,
+		max(state_datetime) as max_state_datetime
 	from public.shipping
-	where state in ('booked', 'recieved')
 	group by shippingid)
-select ssm.shippingid,
+select ssp.shippingid,
 	ssm.status, 
 	ssm.state,
 	ssp.shipping_start_fact_datetime,
-	ssm.state_datetime as shipping_end_fact_datetime
+	ssp.shipping_end_fact_datetime
 from public.shipping ssm
-join ssp using (shippingid, state_datetime)
+join ssp on ssp.shippingid = ssm.shippingid and ssp.max_state_datetime = ssm.state_datetime
 order by 1;
 
 -- select * from public.shipping_status;
@@ -224,6 +232,7 @@ join shipping_status st using (shippingid)
 join public.shipping_transfer stf using (transfer_type_id)
 join public.shipping_agreement sa using (agreementid)
 join public.shipping_country_rates sr using (shipping_country_id);
+-- В задании указаны строгие условия
 --------
 
 --select * from public.shipping_datamart;
@@ -234,3 +243,10 @@ join public.shipping_country_rates sr using (shipping_country_id);
 -- Я думаю что тут несколько пунктов основных, первое это для расширения или внесения изменений в структуру витрины
 -- если появятся новые справочники можно будет их подцепить просто внеся изменения во view.
 -- Второе это возможность отображения источника который постоянно или часто обновляется.
+
+-- Спасибо большое за твои замечания) По вопросам, ну наверное есть один он такого больше прикладного характера.
+-- Как на практике будет выглядеть обновление справочников, ну вот сейчас мы составили справочники на основе статичных
+-- исходных данных, но на практике они будут ежедневно обновляться, и вероятно будут со временем появляться новые характеристики (скажем вендор)
+-- И на сколько я представляю этот процесс, нужно будет писать процедуру которая будет запускаться переодически через некоторое время и считывать из
+-- исходной таблицы последние новые записи, или это должен быть какойто триггер на инсерт в исходную таблицу который будет проверять нет ли отличных храктеристик от то что имеет справочник,
+-- ну и соответсвенно если есть то делать инсерт в справочник.
